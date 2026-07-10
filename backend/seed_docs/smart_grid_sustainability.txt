@@ -1,0 +1,21 @@
+SMART CITY UTILITIES & SUSTAINABLE ENERGY DEPT.
+GUIDELINES FOR RESIDENTIAL SMART GRID SUSTAINABILITY
+Document Reference: SC-SG-2025-V4
+Section 1: The Smart Meter Program
+All residential housing units in Smart City are equipped with Smart Grid meters that transmit real-time electricity consumption data to the central city database. This allows for automated billing, peak demand profiling, and consumer visibility.
+
+Section 2: Electricity Consumption Tier Rates
+Smart City Utilities uses a tiered pricing system to encourage conservation of electrical energy:
+- Tier 1 (Baseline Conservation): Up to 350 kWh per month is billed at the baseline rate of $0.11 per kWh.
+- Tier 2 (Standard Usage): 351 to 750 kWh per month is billed at the rate of $0.16 per kWh.
+- Tier 3 (High Demand): Usage exceeding 750 kWh per month is billed at the high-usage rate of $0.24 per kWh.
+
+Section 3: Peak Demand Hours and Surcharges
+To manage grid stability during high load periods, a peak demand surcharge is applied on weekdays:
+- Peak Hours: 2:00 PM to 7:00 PM (Monday through Friday).
+- During peak hours, an additional surcharge of $0.05 per kWh is applied to Tier 2 and Tier 3 usage.
+- Off-Peak Hours: All other hours, including weekends and federal holidays, are billed at standard tier rates without surcharges.
+
+Section 4: Sustainability Energy Bonus Incentives
+Residents who install solar panels connected to the municipal grid can participate in Net Metering. Excess energy fed back into the grid is credited to the resident's account at $0.08 per kWh. 
+Additionally, residents who keep their monthly electricity consumption under 300 kWh for six consecutive months are awarded a one-time "Energy Conservation Credit" of $50 on their utility bill.
