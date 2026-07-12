@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 
 export default function ChatAssistant() {
   const [selectedCitation, setSelectedCitation] = useState(null);
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' or 'history'
   const [messages, setMessages] = useState([
     {
       id: 1,
@@ -13,6 +14,8 @@ export default function ChatAssistant() {
   ]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const messagesEndRef = useRef(null);
 
   const API_URL = 'http://127.0.0.1:5000/api';
@@ -20,6 +23,32 @@ export default function ChatAssistant() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  useEffect(() => {
+    if (activeTab === 'history') {
+      fetchHistory();
+    }
+  }, [activeTab]);
+
+  const fetchHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/citizen/history?limit=50`, {
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setHistory(data);
+      }
+    } catch (err) {
+      console.error('Error fetching history:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
 
   const handleSend = async (textToSend) => {
     const promptText = textToSend || query.trim();
@@ -29,20 +58,29 @@ export default function ChatAssistant() {
       setQuery('');
     }
 
-    // Append user message
     const userMsg = { id: Date.now(), sender: 'user', text: promptText };
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
 
     try {
       const token = localStorage.getItem('token');
+      
+      // Build conversation context (last 10 messages for short-term memory)
+      const conversationContext = messages.slice(-10).map(msg => ({
+        role: msg.sender === 'user' ? 'user' : 'assistant',
+        content: msg.text
+      }));
+      
       const response = await fetch(`${API_URL}/citizen/query`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': token ? `Bearer ${token}` : '',
         },
-        body: JSON.stringify({ query: promptText }),
+        body: JSON.stringify({ 
+          query: promptText,
+          conversation_history: conversationContext
+        }),
       });
 
       const data = await response.json();
@@ -84,144 +122,147 @@ export default function ChatAssistant() {
     }
   };
 
-  const suggestionChips = [
-    'How do I request residential waste collection?',
-    'What is the speed limit in urban zones?',
-    'What regulations apply to smart grid meters?',
-    'What is the recycling schedule for district 4?'
-  ];
+
 
   return (
     <div style={styles.container}>
-      <div style={styles.chatArea}>
-        <div style={styles.messagesContainer}>
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              style={{
-                ...styles.messageRow,
-                justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-              }}
-            >
-              {msg.sender === 'assistant' && (
-                <div style={styles.avatar}>
-                  <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)' }}>smart_toy</span>
+      {/* Tab Navigation */}
+      <div style={styles.tabNav}>
+        <button
+          onClick={() => setActiveTab('chat')}
+          style={{
+            ...styles.tabBtn,
+            borderBottomColor: activeTab === 'chat' ? 'var(--color-primary)' : 'transparent',
+            color: activeTab === 'chat' ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
+          }}
+        >
+          <span className="material-symbols-outlined">forum</span>
+          Chat
+        </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          style={{
+            ...styles.tabBtn,
+            borderBottomColor: activeTab === 'history' ? 'var(--color-primary)' : 'transparent',
+            color: activeTab === 'history' ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
+          }}
+        >
+          <span className="material-symbols-outlined">history</span>
+          History
+        </button>
+      </div>
+
+      {/* Chat Tab */}
+      {activeTab === 'chat' && (
+        <>
+          <div style={styles.chatArea}>
+            <div style={styles.messagesContainer}>
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  style={{
+                    ...styles.messageRow,
+                    justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+                  }}
+                >
+                  {msg.sender === 'assistant' && (
+                    <div style={styles.avatar}>
+                      <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)' }}>smart_toy</span>
+                    </div>
+                  )}
+                  
+                  <div
+                    style={{
+                      ...styles.bubble,
+                      backgroundColor: msg.sender === 'user' ? 'var(--color-primary-container)' : 'var(--color-surface-container)',
+                      color: msg.sender === 'user' ? 'var(--color-on-primary)' : 'var(--color-on-surface)',
+                      border: msg.sender === 'user' ? 'none' : '1px solid var(--color-outline-variant)',
+                      borderRadius: msg.sender === 'user' ? '12px 12px 0px 12px' : '12px 12px 12px 0px',
+                    }}
+                  >
+                    <p style={styles.bubbleText}>{msg.text}</p>
+                  </div>
+                </div>
+              ))}
+              {loading && (
+                <div style={styles.messageRow}>
+                  <div style={styles.avatar}>
+                    <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)' }}>smart_toy</span>
+                  </div>
+                  <div style={styles.typingIndicator}>
+                    <div style={styles.dot}></div>
+                    <div style={{ ...styles.dot, animationDelay: '0.2s' }}></div>
+                    <div style={{ ...styles.dot, animationDelay: '0.4s' }}></div>
+                    <span style={styles.typingText}>Searching knowledge index...</span>
+                  </div>
                 </div>
               )}
-              
-              <div
-                style={{
-                  ...styles.bubble,
-                  backgroundColor: msg.sender === 'user' ? 'var(--color-primary-container)' : '#f0fdfa',
-                  color: msg.sender === 'user' ? 'var(--color-on-primary)' : 'var(--color-on-background)',
-                  border: msg.sender === 'user' ? 'none' : '1px solid #5eead4',
-                  borderRadius: msg.sender === 'user' ? '12px 12px 0px 12px' : '12px 12px 12px 0px',
-                }}
-              >
-                <p style={styles.bubbleText}>{msg.text}</p>
-
-                {msg.sender === 'assistant' && msg.confidence > 0 && (
-                  <div style={styles.metricsRow}>
-                    <div style={styles.metricItem}>
-                      <span style={styles.metricLabel}>Confidence</span>
-                      <div style={styles.confidenceBarContainer}>
-                        <div
-                          style={{
-                            ...styles.confidenceBar,
-                            width: `${msg.confidence}%`,
-                          }}
-                        />
-                      </div>
-                      <span style={styles.metricVal}>{msg.confidence}%</span>
-                    </div>
-
-                    <div style={styles.sourceBadge}>
-                      <span className="material-symbols-outlined" style={styles.badgeIcon}>verified</span>
-                      <span>Verified Policy</span>
-                    </div>
-                  </div>
-                )}
-
-                {msg.sender === 'assistant' && msg.citations.length > 0 && (
-                  <div style={styles.citationsSection}>
-                    <p style={styles.citationsTitle}>Sources & References</p>
-                    <div style={styles.citationChipsContainer}>
-                      {msg.citations.map((cite, i) => (
-                        <div
-                          key={i}
-                          style={styles.citationChip}
-                          title="Click to view details"
-                          onClick={() => setSelectedCitation(cite)}
-                          className="hover-lift active-scale animate-fade-in"
-                        >
-                          <span className="material-symbols-outlined" style={styles.citeIcon}>description</span>
-                          <span style={styles.citeText}>{cite.filename}</span>
-                          <span style={styles.citeMeta}>{cite.meta}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-          {loading && (
-            <div style={styles.messageRow}>
-              <div style={styles.avatar}>
-                <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)' }}>smart_toy</span>
-              </div>
-              <div style={styles.typingIndicator}>
-                <div style={styles.dot}></div>
-                <div style={{ ...styles.dot, animationDelay: '0.2s' }}></div>
-                <div style={{ ...styles.dot, animationDelay: '0.4s' }}></div>
-                <span style={styles.typingText}>Searching knowledge index...</span>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      <div style={styles.inputArea}>
-        <div style={styles.suggestions}>
-          {suggestionChips.map((chip, idx) => (
-            <button
-              key={idx}
-              onClick={() => handleSend(chip)}
-              style={styles.suggestionChip}
-              className="hover-lift active-scale"
-            >
-              {chip}
-            </button>
-          ))}
-        </div>
-
-        <div style={styles.inputBar}>
-          <div style={styles.inputWrapper}>
-            <button style={styles.actionBtn} title="Upload document context">
-              <span className="material-symbols-outlined" style={{ color: 'var(--color-outline)' }}>attach_file</span>
-            </button>
-            
-            <textarea
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={handleKeyPress}
-              placeholder="Ask a question about city regulations, waste collection, public utility rules..."
-              style={styles.textarea}
-              rows={1}
-            />
-
-            <div style={styles.inputActions}>
-              <button style={styles.actionBtn} title="Voice input">
-                <span className="material-symbols-outlined" style={{ color: 'var(--color-outline)' }}>mic</span>
-              </button>
-              <button onClick={() => handleSend()} style={styles.sendBtn} className="active-scale">
-                <span className="material-symbols-outlined" style={{ color: '#fff' }}>send</span>
-              </button>
+              <div ref={messagesEndRef} />
             </div>
           </div>
+
+          <div style={styles.inputArea}>
+            <div style={styles.inputBar}>
+              <div style={styles.inputWrapper}>
+                <textarea
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={handleKeyPress}
+                  placeholder="Ask a question about city regulations, waste collection, public utility rules..."
+                  style={styles.textarea}
+                  rows={1}
+                />
+
+                <div style={styles.inputActions}>
+                  <button onClick={() => handleSend()} style={styles.sendBtn} className="active-scale">
+                    <span className="material-symbols-outlined" style={{ color: '#fff' }}>send</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* History Tab */}
+      {activeTab === 'history' && (
+        <div style={styles.historyArea}>
+          {historyLoading ? (
+            <div style={styles.loadingState}>
+              <span className="material-symbols-outlined" style={styles.loadingIcon}>hourglass_empty</span>
+              <p>Loading your query history...</p>
+            </div>
+          ) : history.length === 0 ? (
+            <div style={styles.emptyState}>
+              <span className="material-symbols-outlined" style={styles.emptyIcon}>inbox</span>
+              <p>No queries yet. Start asking questions in the Chat tab!</p>
+            </div>
+          ) : (
+            <div style={styles.historyList}>
+              <p style={styles.historyTitle}>Your Query History</p>
+              {history.map((item, idx) => (
+                <div key={idx} style={styles.historyItem} className="hover-lift">
+                  <div style={styles.historyItemLeft}>
+                    <p style={styles.historyQuery}>{item.query}</p>
+                    <span style={styles.historyTime}>{item.timestamp}</span>
+                  </div>
+                  <div style={styles.historyItemRight}>
+                    <span style={styles.confidenceBadge}>{item.confidence}%</span>
+                    <button
+                      onClick={() => handleSend(item.query)}
+                      style={styles.reaskBtn}
+                      title="Ask this question again"
+                      className="active-scale"
+                    >
+                      <span className="material-symbols-outlined">refresh</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
       {/* Citation Detail Modal */}
       {selectedCitation && (
@@ -260,7 +301,31 @@ const styles = {
     height: '100%',
     position: 'relative',
   },
+  tabNav: {
+    display: 'flex',
+    borderBottom: '1px solid var(--color-outline-variant)',
+    backgroundColor: 'var(--color-surface)',
+    padding: '0 var(--spacing-md)',
+  },
+  tabBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: 'none',
+    background: 'none',
+    borderBottom: '3px solid transparent',
+    padding: '12px 16px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
   chatArea: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: 'var(--spacing-md)',
+  },
+  historyArea: {
     flex: 1,
     overflowY: 'auto',
     padding: 'var(--spacing-md)',
@@ -294,10 +359,12 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 'var(--spacing-sm)',
+    borderRadius: '12px',
   },
   bubbleText: {
     fontSize: '15px',
     whiteSpace: 'pre-wrap',
+    margin: 0,
   },
   metricsRow: {
     display: 'flex',
@@ -357,6 +424,7 @@ const styles = {
     textTransform: 'uppercase',
     marginBottom: 'var(--spacing-xs)',
     letterSpacing: '0.05em',
+    margin: 0,
   },
   citationChipsContainer: {
     display: 'flex',
@@ -458,17 +526,7 @@ const styles = {
     maxHeight: '120px',
     color: 'var(--color-on-surface)',
     backgroundColor: 'transparent',
-  },
-  actionBtn: {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    padding: '8px',
-    borderRadius: 'var(--rounded-md)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    transition: 'background-color 0.2s',
+    fontFamily: 'inherit',
   },
   inputActions: {
     display: 'flex',
@@ -487,6 +545,95 @@ const styles = {
     cursor: 'pointer',
     boxShadow: 'var(--shadow-sm)',
     transition: 'opacity 0.2s',
+  },
+  historyList: {
+    maxWidth: '800px',
+    margin: '0 auto',
+  },
+  historyTitle: {
+    fontSize: '16px',
+    fontWeight: '700',
+    color: 'var(--color-on-surface)',
+    marginBottom: 'var(--spacing-md)',
+    margin: 0,
+  },
+  historyItem: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'var(--color-surface)',
+    border: '1px solid var(--color-outline-variant)',
+    borderRadius: 'var(--rounded-md)',
+    padding: 'var(--spacing-sm)',
+    marginBottom: 'var(--spacing-xs)',
+    transition: 'all 0.2s',
+  },
+  historyItemLeft: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  historyQuery: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: 'var(--color-on-surface)',
+    margin: 0,
+  },
+  historyTime: {
+    fontSize: '12px',
+    color: 'var(--color-outline)',
+  },
+  historyItemRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--spacing-sm)',
+  },
+  confidenceBadge: {
+    fontSize: '12px',
+    fontWeight: '700',
+    backgroundColor: 'var(--color-secondary-container)',
+    color: 'var(--color-on-secondary-container)',
+    padding: '4px 10px',
+    borderRadius: 'var(--rounded-full)',
+  },
+  reaskBtn: {
+    background: 'none',
+    border: '1px solid var(--color-outline-variant)',
+    borderRadius: 'var(--rounded-md)',
+    width: '32px',
+    height: '32px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    color: 'var(--color-primary)',
+    transition: 'all 0.2s',
+  },
+  loadingState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '300px',
+    gap: 'var(--spacing-sm)',
+  },
+  loadingIcon: {
+    fontSize: '48px',
+    color: 'var(--color-primary)',
+    animation: 'spin 2s linear infinite',
+  },
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '300px',
+    gap: 'var(--spacing-sm)',
+  },
+  emptyIcon: {
+    fontSize: '48px',
+    color: 'var(--color-outline)',
   },
   modalOverlay: {
     position: 'fixed',
@@ -550,6 +697,7 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    color: 'var(--color-on-surface)',
   },
   modalBody: {
     padding: 'var(--spacing-md)',
@@ -597,13 +745,40 @@ const styles = {
   },
 };
 
-// Add raw CSS keyframe animations for typing indicator
+// Inject missing keyframe animations
 const styleSheet = document.styleSheets[0];
 try {
   styleSheet.insertRule(`
     @keyframes bounce {
       0%, 80%, 100% { transform: scale(0); }
       40% { transform: scale(1.0); }
+    }
+  `, styleSheet.cssRules.length);
+} catch (e) {}
+
+try {
+  styleSheet.insertRule(`
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+  `, styleSheet.cssRules.length);
+} catch (e) {}
+
+try {
+  styleSheet.insertRule(`
+    @keyframes slideUp {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+  `, styleSheet.cssRules.length);
+} catch (e) {}
+
+try {
+  styleSheet.insertRule(`
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
   `, styleSheet.cssRules.length);
 } catch (e) {}

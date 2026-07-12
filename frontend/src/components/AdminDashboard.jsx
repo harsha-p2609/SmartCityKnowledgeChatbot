@@ -88,12 +88,13 @@ export default function AdminDashboard() {
       setSuccess('Document uploaded and indexed successfully!');
       setFile(null);
       
-      // Clear input
       const fileInput = document.getElementById('file-upload-input');
       if (fileInput) fileInput.value = '';
 
-      fetchStats();
-      fetchDocuments();
+      setTimeout(() => {
+        fetchStats();
+        fetchDocuments();
+      }, 1500);
     } catch (err) {
       setError(err.message);
     } finally {

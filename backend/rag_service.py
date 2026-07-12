@@ -1,189 +1,152 @@
 import os
+import re
 import math
 import pypdf
 import docx
 import requests
-import json
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
-# Load env variables
-load_dotenv()
+base_dir = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(base_dir, ".env"))
 
-# Configure GenAI Key
 genai_key = os.getenv("GEMINI_API_KEY")
+groq_key = os.getenv("GROQ_API_KEY")
+groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-# Connect to MongoDB
 mongo_uri = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017/smartcity_db")
-client = MongoClient(mongo_uri)
+client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
 db = client.get_database()
 
+
 def extract_text_from_pdf(file_path):
-    """Extracts text from a PDF file with page metadata."""
     pages_text = []
     try:
         reader = pypdf.PdfReader(file_path)
         for idx, page in enumerate(reader.pages):
             text = page.extract_text()
             if text:
-                pages_text.append({
-                    "text": text,
-                    "page_num": idx + 1
-                })
+                pages_text.append({"text": text, "page_num": idx + 1})
     except Exception as e:
         print(f"Error reading PDF {file_path}: {e}")
     return pages_text
 
+
 def extract_text_from_docx(file_path):
-    """Extracts text from a DOCX file with paragraph metadata."""
     paragraphs_text = []
     try:
         doc = docx.Document(file_path)
         for idx, para in enumerate(doc.paragraphs):
             text = para.text.strip()
             if text:
-                paragraphs_text.append({
-                    "text": text,
-                    "para_num": idx + 1
-                })
+                paragraphs_text.append({"text": text, "para_num": idx + 1})
     except Exception as e:
         print(f"Error reading DOCX {file_path}: {e}")
     return paragraphs_text
 
+
 def extract_text_from_txt(file_path):
-    """Extracts text from plain text or CSV files."""
     lines_text = []
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             for idx, line in enumerate(f):
                 text = line.strip()
                 if text:
-                    lines_text.append({
-                        "text": text,
-                        "line_num": idx + 1
-                    })
+                    lines_text.append({"text": text, "line_num": idx + 1})
     except Exception as e:
         print(f"Error reading text file {file_path}: {e}")
     return lines_text
 
+
 def chunk_extracted_content(extracted_content, file_type, chunk_size=800, chunk_overlap=120):
-    """Splits text content into semantic chunks with overlaps, preserving source location metadata."""
     chunks = []
-    
     for item in extracted_content:
         text = item["text"]
         meta_key = "page" if file_type == "pdf" else ("paragraph" if file_type == "docx" else "line")
-        meta_val = item["page_num"] if file_type == "pdf" else (item["para_num"] if file_type == "docx" else item["line_num"])
-        
-        # Simple character-based splitting with overlap
+        meta_val = item.get("page_num") or item.get("para_num") or item.get("line_num")
         start = 0
         while start < len(text):
             end = start + chunk_size
-            chunk_text = text[start:end]
-            
-            chunks.append({
-                "text": chunk_text,
-                "metadata": {
-                    meta_key: meta_val
-                }
-            })
-            
-            # If we reached the end, break
+            chunks.append({"text": text[start:end], "metadata": {meta_key: meta_val}})
             if end >= len(text):
                 break
-                
-            # Move start back by overlap
             start = end - chunk_overlap
-            # Prevent infinite loops if progress is not made
             if start <= 0 or start >= end:
                 start = end
-                
     return chunks
 
+
 def generate_embedding(text):
-    """Calls Gemini REST API to get embeddings for a text block."""
     if not genai_key:
-        print("GEMINI_API_KEY not set")
         return [0.0] * 768
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={genai_key}"
-        payload = {
-            "content": {
-                "parts": [{"text": text}]
-            }
-        }
-        res = requests.post(url, json=payload, timeout=15)
+        res = requests.post(url, json={"content": {"parts": [{"text": text}]}}, timeout=15)
         if res.status_code == 200:
             return res.json()["embedding"]["values"]
-        else:
-            print(f"Embedding API error: {res.text}")
-            return [0.0] * 768
+        return [0.0] * 768
     except Exception as e:
-        print(f"Embedding generation exception: {e}")
+        print(f"Embedding exception: {e}")
         return [0.0] * 768
 
+
 def generate_query_embedding(query_text):
-    """Calls Gemini REST API to get embeddings for a search query."""
     return generate_embedding(query_text)
 
+
 def cosine_similarity(v1, v2):
-    """Computes cosine similarity between two vector lists."""
     if not v1 or not v2 or len(v1) != len(v2):
         return 0.0
-    dot_product = sum(a * b for a, b in zip(v1, v2))
-    norm_a = math.sqrt(sum(a * a for a in v1))
-    norm_b = math.sqrt(sum(b * b for b in v2))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot_product / (norm_a * norm_b)
+    dot = sum(a * b for a, b in zip(v1, v2))
+    na = math.sqrt(sum(a * a for a in v1))
+    nb = math.sqrt(sum(b * b for b in v2))
+    return dot / (na * nb) if na and nb else 0.0
+
 
 def ingest_document(doc_id, filename, file_path):
-    """Parses a document, splits it into chunks, embeds them, and saves them to MongoDB."""
     ext = filename.split(".")[-1].lower()
-    
-    # Extract text content
     if ext == "pdf":
-        extracted = extract_text_from_pdf(file_path)
-        file_type = "pdf"
+        extracted, file_type = extract_text_from_pdf(file_path), "pdf"
     elif ext in ["docx", "doc"]:
-        extracted = extract_text_from_docx(file_path)
-        file_type = "docx"
+        extracted, file_type = extract_text_from_docx(file_path), "docx"
     else:
-        extracted = extract_text_from_txt(file_path)
-        file_type = "txt"
-        
+        extracted, file_type = extract_text_from_txt(file_path), "txt"
+
     if not extracted:
         return 0
-        
-    # Chunk text
+
     chunks = chunk_extracted_content(extracted, file_type)
-    
-    # Embed chunks and write to DB
     chunk_docs = []
     for idx, c in enumerate(chunks):
-        embedding = generate_embedding(c["text"])
-        
-        chunk_doc = {
+        chunk_docs.append({
             "document_id": doc_id,
             "filename": filename,
             "chunk_index": idx,
             "text": c["text"],
             "metadata": c["metadata"],
-            "embedding": embedding
-        }
-        chunk_docs.append(chunk_doc)
-        
+            "embedding": generate_embedding(c["text"])
+        })
     if chunk_docs:
         db.chunks.insert_many(chunk_docs)
-        
     return len(chunk_docs)
+
+
+def _clean_answer(text):
+    text = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', text)
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'`([^`]*)`', r'\1', text)
+    text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^[\-\*]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 def _build_fallback_answer(query, valid_chunks):
-    """Builds a readable answer from retrieved chunks when LLM synthesis is unavailable."""
     lines = [
-        f"Based on official municipal documents, here is the relevant information about your question:\n",
-        f"**Query:** {query}\n",
+        "Based on official municipal documents, here is the relevant information:",
+        f"Query: {query}",
     ]
-    for i, c in enumerate(valid_chunks[:3]):  # Show top 3 most relevant chunks
+    for c in valid_chunks[:3]:
         meta_str = ""
         if "page" in c["metadata"]:
             meta_str = f"Page {c['metadata']['page']}"
@@ -191,128 +154,208 @@ def _build_fallback_answer(query, valid_chunks):
             meta_str = f"Paragraph {c['metadata']['paragraph']}"
         elif "line" in c["metadata"]:
             meta_str = f"Line {c['metadata']['line']}"
-        lines.append(f"**From [{c['filename']}] ({meta_str}):**")
-        lines.append(f"{c['text'].strip()}\n")
-    lines.append("_Note: This response was assembled directly from official documents. Please consult the cited source documents for full details._")
-    return "\n".join(lines)
+        lines.append(f"From {c['filename']} ({meta_str}):")
+        lines.append(c['text'].strip())
+    lines.append("Note: Please consult the cited source documents for full details.")
+    return "\n\n".join(lines)
 
-def query_rag_pipeline(query, top_k=5):
-    """Executes semantic search and LLM synthesis to answer a question."""
-    # 1. Get query embedding
+
+def generate_groq_completion(prompt):
+    if not groq_key:
+        return None
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": groq_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2
+        }
+        res = requests.post(url, headers=headers, json=payload, timeout=30)
+        if res.status_code == 200:
+            return res.json()["choices"][0]["message"]["content"].strip()
+        print(f"Groq API error ({res.status_code}): {res.text}")
+        return None
+    except Exception as e:
+        print(f"Groq exception: {e}")
+        return None
+
+
+def translate_answer(text, target_language):
+    """Translates answer to target language using Groq."""
+    language_names = {
+        'hi': 'Hindi',
+        'te': 'Telugu',
+        'ta': 'Tamil',
+        'kn': 'Kannada',
+        'es': 'Spanish',
+    }
+    target_lang_name = language_names.get(target_language)
+    if not target_lang_name or not groq_key:
+        return text
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": groq_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a professional translator. Translate the given text accurately without adding or removing information. Preserve all citations and source references exactly as they appear."
+                },
+                {
+                    "role": "user",
+                    "content": f"Translate the following text to {target_lang_name}:\n\n{text}"
+                }
+            ],
+            "temperature": 0.3
+        }
+        res = requests.post(url, headers=headers, json=payload, timeout=30)
+        if res.status_code == 200:
+            translated = res.json()["choices"][0]["message"]["content"].strip()
+            print(f"[TRANSLATE] Successfully translated to {target_lang_name}")
+            return translated
+        print(f"[TRANSLATE] Failed ({res.status_code}): {res.text}")
+        return text
+    except Exception as e:
+        print(f"[TRANSLATE] Exception: {e}")
+        return text
+
+
+def analyze_sentiment(text):
+    text_lower = text.lower()
+    if any(w in text_lower for w in ['frustrated', 'angry', 'upset', 'annoyed', 'disappointed']):
+        return 'frustrated'
+    neg = sum(1 for w in ['sorry', 'error', 'failed', 'cannot', 'unable', 'problem', 'unfortunately'] if w in text_lower)
+    pos = sum(1 for w in ['great', 'excellent', 'helpful', 'successfully', 'good', 'perfect', 'wonderful'] if w in text_lower)
+    if neg > pos:
+        return 'negative'
+    elif pos > neg:
+        return 'positive'
+    return 'neutral'
+
+
+def generate_follow_up_suggestions(query, answer):
+    suggestions = []
+    q = query.lower()
+    a = answer.lower()
+    if 'waste' in q or 'waste' in a:
+        suggestions += ['What are the waste collection timings?', 'How do I report improper waste disposal?']
+    if 'transport' in q or 'traffic' in q or 'vehicle' in a:
+        suggestions += ['What are the traffic rules in my area?', 'How do I apply for a vehicle permit?']
+    if 'utility' in q or 'water' in q or 'electricity' in q:
+        suggestions += ['How do I report a utility issue?', 'What are the utility payment methods?']
+    if 'regulation' in q or 'rule' in q:
+        suggestions += ['Where can I find the complete regulations?', 'How do I file a complaint?']
+    if not suggestions:
+        suggestions = ['Can you provide more details?', 'Are there any related regulations?']
+    return suggestions[:2]
+
+
+def query_rag_pipeline(query, conversation_history=None, user_language="en", top_k=5):
+    if conversation_history is None:
+        conversation_history = []
+
     query_emb = generate_query_embedding(query)
-    
-    # 2. Fetch chunks from DB
-    chunks_cursor = db.chunks.find({}, {"embedding": 1, "text": 1, "filename": 1, "metadata": 1})
-    all_chunks = list(chunks_cursor)
-    
+    all_chunks = list(db.chunks.find({}, {"embedding": 1, "text": 1, "filename": 1, "metadata": 1}))
+
     if not all_chunks:
         return {
-            "answer": "No city documents have been uploaded to the system yet. Please contact the administrator to upload documents.",
-            "citations": [],
-            "confidence": 0
+            "answer": "No city documents have been uploaded yet. Please contact the administrator.",
+            "citations": [], "confidence": 0, "sentiment": "neutral", "follow_up_suggestions": []
         }
-        
-    # 3. Calculate similarity score for each chunk
-    scored_chunks = []
-    for c in all_chunks:
-        score = cosine_similarity(query_emb, c["embedding"])
-        scored_chunks.append({
-            "filename": c["filename"],
-            "text": c["text"],
-            "metadata": c["metadata"],
-            "score": score
-        })
-        
-    # 4. Sort and pick top K
-    scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-    top_chunks = scored_chunks[:top_k]
-    
-    # Filter out chunks with very low similarity (e.g. < 0.25)
-    valid_chunks = [tc for tc in top_chunks if tc["score"] > 0.2]
-    
-    if not valid_chunks:
+
+    scored_chunks = sorted([
+        {"filename": c["filename"], "text": c["text"], "metadata": c["metadata"],
+         "score": cosine_similarity(query_emb, c["embedding"])}
+        for c in all_chunks
+    ], key=lambda x: x["score"], reverse=True)
+
+    valid_chunks = [c for c in scored_chunks[:top_k] if c["score"] > 0.2]
+
+    casual_keywords = ['ok', 'thanks', 'thank you', 'hi', 'hello', 'hey', 'bye', 'goodbye',
+                       'yes', 'no', 'sure', 'cool', 'nice', 'good', 'great', 'awesome', 'lol', 'haha']
+    is_casual = query.lower().strip() in casual_keywords or len(query.split()) <= 2
+
+    if not valid_chunks and not is_casual:
         return {
             "answer": "I cannot find any relevant information in the uploaded official documents to answer your question.",
-            "citations": [],
-            "confidence": 0
+            "citations": [], "confidence": 0, "sentiment": "neutral", "follow_up_suggestions": []
         }
-        
-    # Calculate confidence based on top match score
-    best_score = valid_chunks[0]["score"]
-    confidence_percentage = int(min(max(best_score * 100, 10), 99))
-    
-    # 5. Compile context
-    context_str = ""
-    for idx, c in enumerate(valid_chunks):
-        meta_str = ""
-        if "page" in c["metadata"]:
-            meta_str = f"Page {c['metadata']['page']}"
-        elif "paragraph" in c["metadata"]:
-            meta_str = f"Paragraph {c['metadata']['paragraph']}"
-        elif "line" in c["metadata"]:
-            meta_str = f"Line {c['metadata']['line']}"
-            
-        context_str += f"Source: {c['filename']} ({meta_str})\nContent: {c['text']}\n\n"
-        
-    # 6. Call LLM for completion
-    prompt = f"""
-You are the official Smart City AI Knowledge Assistant. You answer citizen queries about city regulations, civic services, waste management, transportation, and public utilities.
 
-Use the provided source context from official municipal documents to answer the question. 
-Follow these rules strictly:
-1. Base your answer ONLY on the provided Context. Do not invent details or pull facts from outside this context.
-2. If the context does not contain the answer, state: "I cannot find the answer in the uploaded official documents."
-3. Cite your sources directly in your response by mentioning the file name and page/paragraph numbers where appropriate (e.g. "[Waste_Management_Policy.pdf, Page 12]").
-4. Keep your answer professional, clear, and structured.
+    best_score = valid_chunks[0]["score"] if valid_chunks else 0
+    confidence_percentage = int(min(max(best_score * 100, 10), 99)) if valid_chunks else 0
+
+    context_str = ""
+    for c in valid_chunks:
+        meta = c["metadata"]
+        meta_str = f"Page {meta['page']}" if "page" in meta else f"Paragraph {meta['paragraph']}" if "paragraph" in meta else f"Line {meta['line']}" if "line" in meta else ""
+        context_str += f"Source: {c['filename']} ({meta_str})\nContent: {c['text']}\n\n"
+
+    conversation_context = ""
+    if conversation_history:
+        conversation_context = "\nPrevious conversation:\n"
+        for msg in conversation_history[-5:]:
+            conversation_context += f"{msg.get('role','user').capitalize()}: {msg.get('content','')}\n"
+
+    prompt = f"""You are the official Smart City AI Knowledge Assistant. Answer citizen queries about city regulations, civic services, waste management, transportation, and public utilities.
+
+Rules:
+1. Answer ONLY from the provided Context below.
+2. Write in plain prose. No markdown.
+3. Use numbered lists only for steps or items.
+4. Cite sources inline: (source: filename, page X)
+5. If context lacks the answer, say: I cannot find the answer in the uploaded official documents.
+6. Keep answers concise, factual, and professional.
+7. For casual greetings, respond naturally.
+8. Use conversation history for context.
 
 Context:
-{context_str}
+{context_str if context_str else "No specific documents found for this query."}
+{conversation_context}
 
-User Question: {query}
-"""
+Question: {query}
+
+Answer:"""
+
     try:
-        if not genai_key:
-            answer = "Error: GEMINI_API_KEY environment variable not set."
-        else:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={genai_key}"
-            payload = {
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }]
-            }
-            res = requests.post(url, json=payload, timeout=30)
-            if res.status_code == 200:
-                answer = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            elif res.status_code == 429:
-                # Rate limit: synthesize a clean answer directly from the retrieved chunks
-                print(f"LLM rate limited (429), using fallback answer from retrieved context.")
-                answer = _build_fallback_answer(query, valid_chunks)
+        answer = generate_groq_completion(prompt) if groq_key else None
+
+        if answer is None:
+            if not genai_key:
+                answer = "Error: No API keys configured."
             else:
-                print(f"LLM API error: {res.text}")
-                answer = _build_fallback_answer(query, valid_chunks)
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={genai_key}"
+                res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
+                if res.status_code == 200:
+                    answer = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                else:
+                    answer = _build_fallback_answer(query, valid_chunks) if valid_chunks else "I'm here to help!"
     except Exception as e:
-        print(f"LLM generation exception: {e}")
-        answer = _build_fallback_answer(query, valid_chunks)
-        
-    # 7. Format citations
+        print(f"LLM exception: {e}")
+        answer = _build_fallback_answer(query, valid_chunks) if valid_chunks else "I'm here to help!"
+
+    answer = _clean_answer(answer)
+
+    if user_language and user_language != 'en':
+        print(f"[RAG] Translating answer to {user_language}")
+        answer = translate_answer(answer, user_language)
+
     citations = []
-    for c in valid_chunks:
-        meta_label = ""
-        if "page" in c["metadata"]:
-            meta_label = f"p. {c['metadata']['page']}"
-        elif "paragraph" in c["metadata"]:
-            meta_label = f"para. {c['metadata']['paragraph']}"
-        elif "line" in c["metadata"]:
-            meta_label = f"line {c['metadata']['line']}"
-            
-        citations.append({
-            "filename": c["filename"],
-            "meta": meta_label,
-            "text_excerpt": c["text"][:150] + "..." if len(c["text"]) > 150 else c["text"]
-        })
-        
+    if best_score > 0.5 and valid_chunks:
+        for c in valid_chunks:
+            meta = c["metadata"]
+            meta_label = f"p. {meta['page']}" if "page" in meta else f"para. {meta['paragraph']}" if "paragraph" in meta else f"line {meta['line']}" if "line" in meta else ""
+            citations.append({
+                "filename": c["filename"],
+                "meta": meta_label,
+                "text_excerpt": c["text"][:150] + "..." if len(c["text"]) > 150 else c["text"]
+            })
+
     return {
         "answer": answer,
         "citations": citations,
-        "confidence": confidence_percentage
+        "confidence": confidence_percentage,
+        "sentiment": analyze_sentiment(answer),
+        "follow_up_suggestions": generate_follow_up_suggestions(query, answer)
     }

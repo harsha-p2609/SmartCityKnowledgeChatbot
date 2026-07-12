@@ -1,4 +1,5 @@
 import os
+import re
 import datetime
 from functools import wraps
 from flask import Flask, request, jsonify
@@ -9,14 +10,22 @@ import bcrypt
 import jwt
 from dotenv import load_dotenv
 
+# Load environment using absolute path before importing RAG service
+base_dir = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(base_dir, ".env")
+load_dotenv(dotenv_path=env_path)
+
 # Import RAG services
 from rag_service import ingest_document, query_rag_pipeline
 
-# Load environment
-load_dotenv()
-
 app = Flask(__name__)
-CORS(app)  # Enable Cross-Origin Resource Sharing
+CORS(app, resources={r"/api/*": {
+    "origins": "*",
+    "allow_headers": ["Content-Type", "Authorization"],
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "expose_headers": ["Authorization"]
+}})
+
 
 # Configuration
 JWT_SECRET = os.getenv("JWT_SECRET", "smartcity_secret_key_2026_huebits")
@@ -24,10 +33,17 @@ UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "upload
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-# MongoDB client
+# MongoDB client (supports both local and Atlas SRV URIs)
 mongo_uri = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017/smartcity_db")
-client = MongoClient(mongo_uri)
+client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
 db = client.get_database()
+
+# Verify connection on startup
+try:
+    client.admin.command("ping")
+    print("[DB] Successfully connected to MongoDB.")
+except Exception as e:
+    print(f"[DB] WARNING: Could not connect to MongoDB: {e}")
 
 # Helper: Seed default users and documents on startup
 def seed_users():
@@ -147,6 +163,11 @@ def admin_required(f):
         return f(current_user, *args, **kwargs)
     return decorated
 
+# Login attempt tracking (in-memory)
+login_attempts = {}
+LOCKOUT_THRESHOLD = 5
+LOCKOUT_DURATION = 30  # seconds
+
 # --- AUTH ROUTES ---
 
 @app.route("/api/auth/register", methods=["POST"])
@@ -154,23 +175,29 @@ def register():
     data = request.get_json()
     if not data or not data.get("email") or not data.get("password") or not data.get("name"):
         return jsonify({"message": "Missing required fields"}), 400
-        
-    users_col = db.users
-    if users_col.find_one({"email": data["email"]}):
+
+    email = data["email"].strip().lower()
+    name = data["name"].strip()
+    password = data["password"]
+
+    if len(name) < 2:
+        return jsonify({"message": "Name must be at least 2 characters"}), 400
+    if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email):
+        return jsonify({"message": "Invalid email address"}), 400
+    if len(password) < 8:
+        return jsonify({"message": "Password must be at least 8 characters"}), 400
+
+    if db.users.find_one({"email": email}):
         return jsonify({"message": "User already exists"}), 400
-        
-    hashed_password = bcrypt.hashpw(data["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    
-    # Citizens can register. Admin can't be created directly for safety.
-    new_user = {
-        "name": data["name"],
-        "email": data["email"],
+
+    hashed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    db.users.insert_one({
+        "name": name,
+        "email": email,
         "password": hashed_password,
         "role": "citizen",
         "date_created": datetime.datetime.utcnow()
-    }
-    
-    users_col.insert_one(new_user)
+    })
     return jsonify({"message": "User registered successfully"}), 201
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -178,14 +205,30 @@ def login():
     data = request.get_json()
     if not data or not data.get("email") or not data.get("password"):
         return jsonify({"message": "Missing email or password"}), 400
-        
-    user = db.users.find_one({"email": data["email"]})
-    if not user:
+
+    email = data["email"].strip().lower()
+    ip = request.remote_addr
+    key = f"{ip}:{email}"
+    now = datetime.datetime.utcnow()
+
+    # Check lockout
+    if key in login_attempts:
+        attempts, last_time = login_attempts[key]
+        if attempts >= LOCKOUT_THRESHOLD:
+            elapsed = (now - last_time).total_seconds()
+            if elapsed < LOCKOUT_DURATION:
+                wait = int(LOCKOUT_DURATION - elapsed)
+                return jsonify({"message": f"Too many failed attempts. Try again in {wait}s."}), 429
+            else:
+                login_attempts.pop(key, None)
+
+    user = db.users.find_one({"email": email})
+    if not user or not bcrypt.checkpw(data["password"].encode("utf-8"), user["password"].encode("utf-8")):
+        attempts = login_attempts.get(key, (0, now))[0] + 1
+        login_attempts[key] = (attempts, now)
         return jsonify({"message": "Invalid email or password"}), 401
-        
-    if not bcrypt.checkpw(data["password"].encode("utf-8"), user["password"].encode("utf-8")):
-        return jsonify({"message": "Invalid email or password"}), 401
-        
+
+    login_attempts.pop(key, None)
     token = jwt.encode({
         "user_id": str(user["_id"]),
         "name": user["name"],
@@ -193,34 +236,39 @@ def login():
         "role": user["role"],
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7)
     }, JWT_SECRET, algorithm="HS256")
-    
+
     return jsonify({
         "token": token,
-        "user": {
-            "name": user["name"],
-            "email": user["email"],
-            "role": user["role"]
-        }
+        "user": {"name": user["name"], "email": user["email"], "role": user["role"]}
     }), 200
 
 # --- CITIZEN & GENERAL RAG ROUTES ---
 
 @app.route("/api/citizen/query", methods=["POST"])
-def query():
+@token_required
+def query(current_user):
     data = request.get_json()
     if not data or not data.get("query"):
         return jsonify({"message": "Missing query field"}), 400
         
     query_text = data["query"]
+    conversation_history = data.get("conversation_history", [])
+    user_language = data.get("language", "en")
+    print(f"[QUERY API] Received query: {query_text} in language: {user_language}", flush=True)
     
-    # Increment query stats count
     db.system_stats.update_one({"type": "counters"}, {"$inc": {"query_count": 1}})
     
-    # Process pipeline
-    result = query_rag_pipeline(query_text)
+    try:
+        from rag_service import groq_key, genai_key, groq_model
+        print(f"[QUERY API] Keys status - Groq Key configured: {groq_key is not None}, Gemini Key configured: {genai_key is not None}", flush=True)
+        result = query_rag_pipeline(query_text, conversation_history, user_language)
+        print(f"[QUERY API] Result answer preview: {result.get('answer')[:100]}...", flush=True)
+    except Exception as e:
+        print(f"[QUERY API] Error executing query pipeline: {e}", flush=True)
+        return jsonify({"message": f"Pipeline error: {e}"}), 500
     
-    # Log user query activity
     db.query_activity.insert_one({
+        "user_id": str(current_user["_id"]),
         "query": query_text,
         "confidence": result["confidence"],
         "timestamp": datetime.datetime.utcnow()
@@ -228,7 +276,69 @@ def query():
     
     return jsonify(result), 200
 
-# --- ADMIN DOCUMENT ROUTES ---
+# --- CITIZEN HISTORY ROUTE ---
+
+@app.route("/api/citizen/history", methods=["GET"])
+@token_required
+def get_citizen_history(current_user):
+    limit = int(request.args.get("limit", 20))
+    records = list(
+        db.query_activity.find(
+            {"user_id": str(current_user["_id"])},
+            {"_id": 0, "query": 1, "confidence": 1, "timestamp": 1}
+        ).sort("timestamp", -1).limit(limit)
+    )
+    for r in records:
+        if "timestamp" in r:
+            r["timestamp"] = r["timestamp"].strftime("%b %d, %I:%M %p")
+    return jsonify(records), 200
+
+@app.route("/api/citizen/saved-queries", methods=["POST"])
+@token_required
+def save_query(current_user):
+    data = request.get_json()
+    if not data or not data.get("query"):
+        return jsonify({"message": "Missing query field"}), 400
+    
+    db.saved_queries.insert_one({
+        "user_id": str(current_user["_id"]),
+        "query": data["query"],
+        "timestamp": datetime.datetime.utcnow()
+    })
+    return jsonify({"message": "Query saved successfully"}), 201
+
+@app.route("/api/citizen/saved-queries", methods=["GET"])
+@token_required
+def get_saved_queries(current_user):
+    queries = list(db.saved_queries.find(
+        {"user_id": str(current_user["_id"])},
+        {"_id": 1, "query": 1, "timestamp": 1}
+    ).sort("timestamp", -1))
+    for q in queries:
+        q["_id"] = str(q["_id"])
+    return jsonify(queries), 200
+
+@app.route("/api/citizen/saved-queries/<query_id>", methods=["DELETE"])
+@token_required
+def delete_saved_query(current_user, query_id):
+    db.saved_queries.delete_one({"_id": ObjectId(query_id), "user_id": str(current_user["_id"])})
+    return jsonify({"message": "Query deleted successfully"}), 200
+
+@app.route("/api/citizen/feedback", methods=["POST"])
+@token_required
+def submit_feedback(current_user):
+    data = request.get_json()
+    if not data or not data.get("message_id"):
+        return jsonify({"message": "Missing message_id field"}), 400
+    
+    db.feedback.insert_one({
+        "user_id": str(current_user["_id"]),
+        "message_id": data["message_id"],
+        "rating": data.get("rating", 0),
+        "feedback": data.get("feedback", ""),
+        "timestamp": datetime.datetime.utcnow()
+    })
+    return jsonify({"message": "Feedback submitted successfully"}), 201
 
 @app.route("/api/admin/documents", methods=["GET"])
 @token_required

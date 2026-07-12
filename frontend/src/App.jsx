@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Login from './components/Login';
-import ChatAssistant from './components/ChatAssistant';
+import ChatAssistant from './components/ChatAssistantEnhanced';
 import AdminDashboard from './components/AdminDashboard';
 import RagFlowMonitor from './components/RagFlowMonitor';
 
@@ -8,6 +8,10 @@ export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('chat'); // 'chat', 'admin', 'flow'
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('darkMode');
+    return saved ? JSON.parse(saved) : false;
+  });
 
   useEffect(() => {
     const cachedUser = localStorage.getItem('user');
@@ -15,6 +19,15 @@ export default function App() {
       setUser(JSON.parse(cachedUser));
     }
   }, [token]);
+
+  useEffect(() => {
+    localStorage.setItem('darkMode', JSON.stringify(isDarkMode));
+    if (isDarkMode) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  }, [isDarkMode]);
 
   const handleLoginSuccess = (userToken, userData) => {
     setToken(userToken);
@@ -48,6 +61,16 @@ export default function App() {
           <span style={styles.logoText}>Smart City Knowledge Portal</span>
         </div>
         <div style={styles.headerActions}>
+          <button
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            style={styles.themeBtn}
+            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="hover-lift active-scale"
+          >
+            <span className="material-symbols-outlined">
+              {isDarkMode ? 'light_mode' : 'dark_mode'}
+            </span>
+          </button>
           <div style={styles.badge} className="hover-lift">
             <span style={styles.badgeDot}></span>
             <span style={styles.badgeLabel}>
@@ -128,11 +151,11 @@ export default function App() {
         {/* Content Panel */}
         <main style={{
           ...styles.contentArea,
-          overflowY: activeTab === 'admin' ? 'auto' : 'hidden'
+          overflowY: activeTab === 'chat' ? 'hidden' : 'auto'
         }}>
           <div style={{
             ...styles.contentWrapper,
-            height: activeTab === 'admin' ? 'auto' : '100%',
+            height: activeTab === 'chat' ? '100%' : 'auto',
             padding: activeTab === 'chat' ? '0' : 'var(--spacing-md)'
           }}>
             {activeTab === 'chat' && <ChatAssistant />}
@@ -140,6 +163,7 @@ export default function App() {
             {activeTab === 'admin' && user.role === 'admin' && <AdminDashboard />}
           </div>
         </main>
+
       </div>
     </div>
   );
@@ -201,6 +225,19 @@ const styles = {
     fontSize: '12px',
     fontWeight: '600',
     color: 'var(--color-on-surface-variant)',
+  },
+  themeBtn: {
+    background: 'none',
+    border: '1px solid var(--color-outline-variant)',
+    borderRadius: 'var(--rounded-md)',
+    width: '36px',
+    height: '36px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    color: 'var(--color-on-surface)',
+    transition: 'all 0.2s',
   },
   logoutBtn: {
     display: 'flex',

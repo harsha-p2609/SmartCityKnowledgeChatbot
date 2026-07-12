@@ -1,19 +1,52 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+
+// Safely inject @keyframes animation once on mount
+function injectPulseAnimation() {
+  const styleId = 'rag-flow-pulse-style';
+  if (document.getElementById(styleId)) return;
+  const styleEl = document.createElement('style');
+  styleEl.id = styleId;
+  styleEl.textContent = `
+    @keyframes ragPulse {
+      0%   { box-shadow: 0 0 0 0 rgba(46, 125, 50, 0.5); }
+      70%  { box-shadow: 0 0 0 10px rgba(46, 125, 50, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(46, 125, 50, 0); }
+    }
+    @keyframes flowLine {
+      0%   { background-position: 0 0; }
+      100% { background-position: 0 24px; }
+    }
+    .rag-node-card {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .rag-node-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    }
+  `;
+  document.head.appendChild(styleEl);
+}
 
 export default function RagFlowMonitor() {
   const [activeStep, setActiveStep] = useState('chunking');
+
+  useEffect(() => {
+    injectPulseAnimation();
+  }, []);
 
   const steps = [
     {
       id: 'documents',
       title: 'City Documents',
       icon: 'source',
-      badge: 'PDF, DOCX, CSV',
-      description: 'Raw city regulations, waste schedules, transport rules uploaded by the administrator.',
+      badge: 'PDF · DOCX · CSV',
+      color: '#3b82f6',
+      description: 'Raw city regulations, waste schedules, and transport rules uploaded by the administrator. Only admins can upload or delete documents.',
       details: {
         'Supported Formats': '.pdf, .docx, .txt, .csv',
-        'Storage Staging': 'Local system directory /uploads',
-        'Database Logging': 'Stored in smartcity_db.documents'
+        'Storage Location': 'Server /uploads directory',
+        'Database Logging': 'Atlas: smartcity_db.documents',
+        'Access Control': 'Admin-only upload & delete'
       }
     },
     {
@@ -21,11 +54,13 @@ export default function RagFlowMonitor() {
       title: 'Document Loader',
       icon: 'file_download',
       badge: 'Text Extractor',
-      description: 'Extracts structured text contents and layout elements. Strips binary headers and figures.',
+      color: '#8b5cf6',
+      description: 'Extracts structured text content and layout elements from uploaded files. Strips binary headers and non-text elements.',
       details: {
         'PDF Parsing': 'pypdf PdfReader extractor',
         'Word Parsing': 'python-docx Document text extractor',
-        'Spreadsheet Parsing': 'Native line-by-line CSV parser'
+        'CSV / TXT Parsing': 'Native line-by-line text parser',
+        'Error Handling': 'Graceful fallback on parse failure'
       }
     },
     {
@@ -33,35 +68,41 @@ export default function RagFlowMonitor() {
       title: 'Text Chunking',
       icon: 'reorder',
       badge: 'Recursive Split',
-      description: 'Recursively splits the raw parsed text into smaller overlapping sections to preserve semantic context.',
+      color: '#f59e0b',
+      description: 'Recursively splits the raw parsed text into smaller overlapping sections to preserve semantic context at boundaries.',
       details: {
         'Target Chunk Size': '800 Characters',
-        'Overlap Ratio': '15% (120 Characters)',
-        'Locational Metadata': 'Page num (PDF) / Paragraph num (Word)'
+        'Overlap Size': '120 Characters (15%)',
+        'Location Metadata': 'Page num (PDF) · Paragraph num (DOCX)',
+        'Storage Target': 'Atlas: smartcity_db.chunks'
       }
     },
     {
       id: 'embeddings',
-      title: 'Embeddings',
+      title: 'Vector Embeddings',
       icon: 'neurology',
-      badge: 'Gemini Vector API',
-      description: 'Converts chunks of text into high-dimensional vector representations capturing semantic meaning.',
+      badge: 'Gemini API',
+      color: '#10b981',
+      description: 'Converts text chunks into high-dimensional vector representations that capture semantic meaning using Google Gemini.',
       details: {
-        'Embedding Model': 'models/text-embedding-004',
-        'Vector Dimensions': '768 Dimensions (Gemini)',
-        'API Request Mode': 'retrieval_document (Bulk batching)'
+        'Embedding Model': 'gemini-embedding-001',
+        'Vector Dimensions': '768 Dimensions',
+        'API Mode': 'REST POST to Gemini API',
+        'Fallback': 'Zero vector on API failure'
       }
     },
     {
       id: 'database',
-      title: 'Vector Database',
+      title: 'Vector Store',
       icon: 'storage',
-      badge: 'MongoDB Chunks',
-      description: 'Stores text chunks, source metadata, and embedding vectors for ultra-fast persistent querying.',
+      badge: 'MongoDB Atlas',
+      color: '#06b6d4',
+      description: 'Stores text chunks, source location metadata, and embedding vectors persistently in MongoDB Atlas for fast querying.',
       details: {
-        'Collection Name': 'smartcity_db.chunks',
-        'Vector Storage Format': 'Standard Array [Double]',
-        'Index Configuration': 'Document references and chunk indexes'
+        'Cluster': 'aismartcityapp.n2ofg6l.mongodb.net',
+        'Collection': 'smartcity_db.chunks',
+        'Vector Format': 'Array [Float64] per chunk',
+        'Document Ref': 'document_id links chunk to source file'
       }
     },
     {
@@ -69,23 +110,27 @@ export default function RagFlowMonitor() {
       title: 'Semantic Search',
       icon: 'manage_search',
       badge: 'Cosine Similarity',
-      description: 'Calculates similarity between query embedding and document chunk embeddings to find top K references.',
+      color: '#f97316',
+      description: 'Embeds the user query and compares it against all stored chunk vectors using cosine similarity to find the most relevant context.',
       details: {
-        'Matching Algorithm': 'Native Python Cosine Similarity',
-        'Mathematical Formula': 'dot_product(A, B) / (norm(A) * norm(B))',
-        'Default Retain Count': 'Top 5 matches (Filtered at similarity score > 0.2)'
+        'Algorithm': 'Native Python Cosine Similarity',
+        'Formula': 'dot(A,B) / (‖A‖ · ‖B‖)',
+        'Top K Results': '5 Matches',
+        'Similarity Threshold': 'Score > 0.2 (filtered out below)'
       }
     },
     {
       id: 'rag',
-      title: 'RAG Ingestion',
+      title: 'RAG Prompting',
       icon: 'prompt_suggestion',
-      badge: 'Grounded LLM Prompt',
-      description: 'Compiles the user query and retrieved context chunks into a structured prompt, instructing the LLM to write a grounded response.',
+      badge: 'Grounded LLM',
+      color: '#ec4899',
+      description: 'Compiles the user query and retrieved context chunks into a structured prompt, instructing the LLM to produce a grounded response.',
       details: {
-        'Target LLM': 'models/gemini-1.5-flash',
-        'System Guidelines': 'Answer ONLY using provided text, cite files & pages, report confidence',
-        'Hallucination Shield': 'Return "I cannot find the answer..." if context is absent'
+        'Primary LLM': 'Groq — llama-3.3-70b-versatile',
+        'Fallback LLM': 'Google Gemini 2.0 Flash',
+        'Grounding Rule': 'Answer ONLY from provided context',
+        'Hallucination Guard': 'Returns "I cannot find..." if context absent'
       }
     },
     {
@@ -93,67 +138,102 @@ export default function RagFlowMonitor() {
       title: 'AI Response',
       icon: 'chat',
       badge: 'Verified Output',
-      description: 'Presents the formatted answer to the user with confidence gauges and clickable citations linking back to original sources.',
+      color: '#84cc16',
+      description: 'Presents the answer to the citizen with a confidence score and source citations. Citizens access information only via the chatbot — not raw documents.',
       details: {
-        'Citations Mapping': 'Highlights matching file, page/paragraph, and excerpt text',
-        'Confidence Scoring': 'Calculated based on best cosine similarity match score',
-        'Citizen Actions': 'Feedback ratings (Helpful / Inaccurate), copy answers'
+        'Confidence Score': 'Derived from best cosine similarity score',
+        'Citations': 'File name + page/paragraph + excerpt',
+        'Citizen Access': 'Chatbot only — no direct document download',
+        'Feedback': 'Helpful / Inaccurate rating supported'
       }
     }
   ];
 
+  const activeStepData = steps.find(s => s.id === activeStep);
+
   return (
     <div style={styles.container}>
-      <div style={styles.header}>
-        <h3 style={styles.title}>RAG Infrastructure Flow</h3>
-        <p style={styles.subtitle}>Click on any stage in the pipeline to view real-time operations, parameters, and metadata configurations.</p>
+      {/* Page Header */}
+      <div style={styles.pageHeader}>
+        <div style={styles.headerLeft}>
+          <div style={styles.headerIconBg}>
+            <span className="material-symbols-outlined" style={styles.headerIcon}>account_tree</span>
+          </div>
+          <div>
+            <h2 style={styles.pageTitle}>RAG Infrastructure Flow</h2>
+            <p style={styles.pageSubtitle}>
+              Click any stage to inspect its technical parameters and live configuration.
+            </p>
+          </div>
+        </div>
+        <div style={styles.liveChip}>
+          <div style={styles.liveDot} />
+          <span style={styles.liveText}>Pipeline Active</span>
+        </div>
       </div>
 
+      {/* Main Content: Flow Chart + Details */}
       <div style={styles.splitLayout}>
-        {/* Left Column: Visual flow chart */}
+
+        {/* Left — Vertical Flow Chain */}
         <div style={styles.flowColumn}>
           <div style={styles.flowChain}>
             {steps.map((step, idx) => {
-              const isSelected = activeStep === step.id;
+              const isActive = activeStep === step.id;
               return (
                 <React.Fragment key={step.id}>
+                  {/* Connector Arrow between nodes */}
                   {idx > 0 && (
-                    <div style={styles.arrowWrapper}>
-                      <span className="material-symbols-outlined" style={styles.arrowIcon}>arrow_downward</span>
-                      <div className="flow-line" style={styles.animatedLine} />
+                    <div style={styles.connectorWrap}>
+                      <div style={{ ...styles.connectorLine, borderColor: step.color + '55' }} />
+                      <div style={{ ...styles.connectorArrow, borderTopColor: step.color }}>
+                        <span className="material-symbols-outlined" style={{ ...styles.arrowIcon, color: step.color }}>
+                          expand_more
+                        </span>
+                      </div>
                     </div>
                   )}
-                  
+
+                  {/* Pipeline Step Card */}
                   <div
+                    className="rag-node-card"
                     onClick={() => setActiveStep(step.id)}
                     style={{
                       ...styles.nodeCard,
-                      border: isSelected ? '2px solid var(--color-primary)' : '1px solid var(--color-outline-variant)',
-                      boxShadow: isSelected ? 'var(--shadow-lg)' : 'var(--shadow-sm)',
-                      transform: isSelected ? 'scale(1.02)' : 'scale(1)',
-                      backgroundColor: isSelected ? '#f8fafc' : 'var(--color-surface)'
+                      border: isActive
+                        ? `2px solid ${step.color}`
+                        : '1px solid var(--color-outline-variant)',
+                      boxShadow: isActive
+                        ? `0 0 0 4px ${step.color}22, 0 8px 24px rgba(0,0,0,0.10)`
+                        : 'var(--shadow-sm)',
+                      backgroundColor: isActive ? `${step.color}0d` : 'var(--color-surface)',
                     }}
-                    className="hover-lift"
                   >
-                    <div style={styles.nodeHeader}>
-                      <div style={{
-                        ...styles.iconBox,
-                        backgroundColor: isSelected ? 'var(--color-primary-container)' : 'var(--color-surface-container-high)',
-                        color: isSelected ? 'var(--color-on-primary)' : 'var(--color-primary)'
-                      }}>
-                        <span className="material-symbols-outlined">{step.icon}</span>
+                    {/* Step number + icon row */}
+                    <div style={styles.nodeTop}>
+                      <div style={{ ...styles.stepNumBadge, backgroundColor: step.color + '22', color: step.color }}>
+                        {String(idx + 1).padStart(2, '0')}
+                      </div>
+                      <div style={{ ...styles.iconCircle, backgroundColor: isActive ? step.color : step.color + '22' }}>
+                        <span className="material-symbols-outlined" style={{ ...styles.nodeIcon, color: isActive ? '#fff' : step.color }}>
+                          {step.icon}
+                        </span>
                       </div>
                       <span style={{
                         ...styles.nodeBadge,
-                        backgroundColor: isSelected ? 'var(--color-secondary-container)' : 'var(--color-surface-container-low)',
-                        color: isSelected ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)'
-                      }}>{step.badge}</span>
+                        backgroundColor: isActive ? step.color + '22' : 'var(--color-surface-container-low)',
+                        color: isActive ? step.color : 'var(--color-on-surface-variant)',
+                        border: `1px solid ${isActive ? step.color + '44' : 'transparent'}`
+                      }}>
+                        {step.badge}
+                      </span>
                     </div>
+
+                    {/* Title + description */}
                     <div style={styles.nodeBody}>
-                      <h4 style={{
-                        ...styles.nodeTitle,
-                        color: isSelected ? 'var(--color-primary)' : 'var(--color-on-surface)'
-                      }}>{step.title}</h4>
+                      <h4 style={{ ...styles.nodeTitle, color: isActive ? step.color : 'var(--color-on-surface)' }}>
+                        {step.title}
+                      </h4>
                       <p style={styles.nodeDesc}>{step.description}</p>
                     </div>
                   </div>
@@ -163,48 +243,107 @@ export default function RagFlowMonitor() {
           </div>
         </div>
 
-        {/* Right Column: Dynamic Step Details Panel */}
+        {/* Right — Sticky Details Panel */}
         <div style={styles.detailsColumn}>
-          {(() => {
-            const step = steps.find(s => s.id === activeStep);
-            if (!step) return null;
-            return (
-              <div style={styles.detailsPanel}>
-                <div style={styles.detailsHeader}>
-                  <span className="material-symbols-outlined" style={styles.detailsIcon}>{step.icon}</span>
-                  <div>
-                    <h3 style={styles.detailsTitle}>{step.title}</h3>
-                    <span style={styles.detailsBadge}>{step.badge}</span>
-                  </div>
+          {activeStepData && (
+            <div style={{ ...styles.detailsPanel, borderTop: `4px solid ${activeStepData.color}` }}>
+              {/* Panel header */}
+              <div style={styles.detailsHeader}>
+                <div style={{ ...styles.detailsIconCircle, backgroundColor: activeStepData.color + '22' }}>
+                  <span className="material-symbols-outlined" style={{ ...styles.detailsIcon, color: activeStepData.color }}>
+                    {activeStepData.icon}
+                  </span>
                 </div>
-
-                <div style={styles.detailsSection}>
-                  <h4 style={styles.sectionTitle}>Pipeline Stage Overview</h4>
-                  <p style={styles.sectionText}>{step.description}</p>
-                </div>
-
-                <div style={styles.detailsSection}>
-                  <h4 style={styles.sectionTitle}>Technical Configuration Properties</h4>
-                  <div style={styles.propsList}>
-                    {Object.entries(step.details).map(([key, val]) => (
-                      <div key={key} style={styles.propItem}>
-                        <span style={styles.propKey}>{key}</span>
-                        <span style={styles.propVal}>{val}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div style={styles.detailsSection}>
-                  <h4 style={styles.sectionTitle}>Simulation Status</h4>
-                  <div style={styles.statusBox}>
-                    <div style={styles.statusPulse}></div>
-                    <span style={styles.statusText}>Systems Operational (Listening to updates)</span>
-                  </div>
+                <div>
+                  <h3 style={{ ...styles.detailsTitle, color: activeStepData.color }}>
+                    {activeStepData.title}
+                  </h3>
+                  <span style={{ ...styles.detailsBadge, color: activeStepData.color, backgroundColor: activeStepData.color + '18' }}>
+                    {activeStepData.badge}
+                  </span>
                 </div>
               </div>
-            );
-          })()}
+
+              {/* Overview */}
+              <div style={styles.detailsSection}>
+                <p style={styles.sectionLabel}>PIPELINE STAGE OVERVIEW</p>
+                <p style={styles.sectionText}>{activeStepData.description}</p>
+              </div>
+
+              {/* Technical properties */}
+              <div style={styles.detailsSection}>
+                <p style={styles.sectionLabel}>TECHNICAL CONFIGURATION</p>
+                <div style={styles.propsList}>
+                  {Object.entries(activeStepData.details).map(([key, val]) => (
+                    <div key={key} style={styles.propRow}>
+                      <span style={styles.propKey}>{key}</span>
+                      <span style={{ ...styles.propVal, color: activeStepData.color }}>{val}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Status */}
+              <div style={styles.detailsSection}>
+                <p style={styles.sectionLabel}>SIMULATION STATUS</p>
+                <div style={styles.statusBox}>
+                  <div style={styles.statusPulse} />
+                  <span style={styles.statusText}>Systems Operational — Listening for Updates</span>
+                </div>
+              </div>
+
+              {/* Step navigation */}
+              <div style={styles.navRow}>
+                {steps.findIndex(s => s.id === activeStep) > 0 && (
+                  <button
+                    style={styles.navBtn}
+                    onClick={() => {
+                      const idx = steps.findIndex(s => s.id === activeStep);
+                      setActiveStep(steps[idx - 1].id);
+                    }}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>arrow_back</span>
+                    Previous Stage
+                  </button>
+                )}
+                {steps.findIndex(s => s.id === activeStep) < steps.length - 1 && (
+                  <button
+                    style={{ ...styles.navBtn, marginLeft: 'auto', backgroundColor: activeStepData.color + '18', color: activeStepData.color, border: `1px solid ${activeStepData.color + '44'}` }}
+                    onClick={() => {
+                      const idx = steps.findIndex(s => s.id === activeStep);
+                      setActiveStep(steps[idx + 1].id);
+                    }}
+                  >
+                    Next Stage
+                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>arrow_forward</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Pipeline summary card below sticky panel */}
+          <div style={styles.summaryCard}>
+            <p style={styles.sectionLabel}>PIPELINE SUMMARY</p>
+            <div style={styles.summaryGrid}>
+              <div style={styles.summaryItem}>
+                <span style={styles.summaryNum}>8</span>
+                <span style={styles.summaryLabel}>Pipeline Stages</span>
+              </div>
+              <div style={styles.summaryItem}>
+                <span style={styles.summaryNum}>768</span>
+                <span style={styles.summaryLabel}>Vector Dimensions</span>
+              </div>
+              <div style={styles.summaryItem}>
+                <span style={styles.summaryNum}>Top 5</span>
+                <span style={styles.summaryLabel}>Semantic Matches</span>
+              </div>
+              <div style={styles.summaryItem}>
+                <span style={styles.summaryNum}>Atlas</span>
+                <span style={styles.summaryLabel}>Vector Store</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -216,109 +355,186 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 'var(--spacing-md)',
+    paddingBottom: 'var(--spacing-xl)',
   },
-  header: {
-    marginBottom: 'var(--spacing-sm)',
+
+  // Header
+  pageHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 'var(--spacing-sm)',
   },
-  title: {
+  headerLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--spacing-sm)',
+  },
+  headerIconBg: {
+    width: '48px',
+    height: '48px',
+    borderRadius: 'var(--rounded-lg)',
+    backgroundColor: 'var(--color-primary-container)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerIcon: {
+    fontSize: '26px',
+    color: 'var(--color-on-primary)',
+  },
+  pageTitle: {
     fontSize: '20px',
     fontWeight: '700',
     color: 'var(--color-on-surface)',
-    marginBottom: 'var(--spacing-base)',
+    margin: 0,
   },
-  subtitle: {
-    fontSize: '14px',
+  pageSubtitle: {
+    fontSize: '13px',
     color: 'var(--color-on-surface-variant)',
+    margin: 0,
     lineHeight: '1.4',
   },
+  liveChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    backgroundColor: '#ecfdf5',
+    border: '1px solid #a7f3d0',
+    borderRadius: 'var(--rounded-full)',
+    padding: '6px 14px',
+  },
+  liveDot: {
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    backgroundColor: '#10b981',
+    animation: 'ragPulse 2s infinite',
+  },
+  liveText: {
+    fontSize: '12px',
+    fontWeight: '600',
+    color: '#065f46',
+  },
+
+  // Layout
   splitLayout: {
     display: 'grid',
-    gridTemplateColumns: '1.2fr 1fr',
-    gap: 'var(--spacing-md)',
+    gridTemplateColumns: '1.3fr 1fr',
+    gap: 'var(--spacing-lg)',
     alignItems: 'start',
   },
+
+  // Flow column
   flowColumn: {
     display: 'flex',
     justifyContent: 'center',
-    padding: 'var(--spacing-sm) 0',
   },
   flowChain: {
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
+    alignItems: 'stretch',
     width: '100%',
-    maxWidth: '440px',
+    maxWidth: '500px',
   },
-  nodeCard: {
-    width: '100%',
-    padding: 'var(--spacing-sm) var(--spacing-md)',
-    borderRadius: 'var(--rounded-lg)',
-    cursor: 'pointer',
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+
+  // Connector between nodes
+  connectorWrap: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 'var(--spacing-xs)',
-  },
-  nodeHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
     alignItems: 'center',
-  },
-  iconBox: {
-    width: '32px',
     height: '32px',
-    borderRadius: 'var(--rounded-md)',
+    position: 'relative',
+  },
+  connectorLine: {
+    width: '0px',
+    height: '100%',
+    borderLeft: '2px dashed',
+    opacity: 0.5,
+  },
+  connectorArrow: {
+    position: 'absolute',
+    bottom: 0,
+  },
+  arrowIcon: {
+    fontSize: '20px',
+    display: 'block',
+    marginTop: '-4px',
+  },
+
+  // Node cards
+  nodeCard: {
+    width: '100%',
+    borderRadius: 'var(--rounded-lg)',
+    padding: 'var(--spacing-sm) var(--spacing-md)',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  nodeTop: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+  },
+  stepNumBadge: {
+    fontSize: '10px',
+    fontWeight: '800',
+    padding: '2px 7px',
+    borderRadius: '4px',
+    letterSpacing: '0.05em',
+    minWidth: '28px',
+    textAlign: 'center',
+  },
+  iconCircle: {
+    width: '34px',
+    height: '34px',
+    borderRadius: 'var(--rounded-full)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    transition: 'all 0.3s',
+    flexShrink: 0,
+    transition: 'background-color 0.3s',
+  },
+  nodeIcon: {
+    fontSize: '18px',
+    transition: 'color 0.3s',
   },
   nodeBadge: {
-    fontSize: '11px',
+    marginLeft: 'auto',
+    fontSize: '10px',
     fontWeight: '700',
-    padding: '2px 8px',
+    padding: '3px 10px',
     borderRadius: 'var(--rounded-full)',
     textTransform: 'uppercase',
+    letterSpacing: '0.04em',
   },
   nodeBody: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: '4px',
   },
   nodeTitle: {
     fontSize: '15px',
     fontWeight: '700',
+    margin: 0,
     transition: 'color 0.3s',
   },
   nodeDesc: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: 'var(--color-on-surface-variant)',
-    lineHeight: '1.4',
+    lineHeight: '1.5',
+    margin: 0,
   },
-  arrowWrapper: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    height: '36px',
-    justifyContent: 'center',
-    position: 'relative',
-    width: '100%',
-  },
-  arrowIcon: {
-    fontSize: '20px',
-    color: 'var(--color-outline-variant)',
-    zIndex: 2,
-  },
-  animatedLine: {
-    position: 'absolute',
-    width: '2px',
-    height: '100%',
-    top: 0,
-    zIndex: 1,
-  },
+
+  // Details panel (sticky)
   detailsColumn: {
     position: 'sticky',
-    top: '80px',
+    top: '16px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--spacing-md)',
   },
   detailsPanel: {
     backgroundColor: 'var(--color-surface)',
@@ -337,21 +553,27 @@ const styles = {
     paddingBottom: 'var(--spacing-sm)',
     borderBottom: '1px solid var(--color-outline-variant)',
   },
+  detailsIconCircle: {
+    width: '52px',
+    height: '52px',
+    borderRadius: 'var(--rounded-lg)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
   detailsIcon: {
-    fontSize: '36px',
-    color: 'var(--color-primary)',
+    fontSize: '30px',
   },
   detailsTitle: {
-    fontSize: '18px',
+    fontSize: '17px',
     fontWeight: '700',
-    color: 'var(--color-on-surface)',
+    margin: '0 0 4px 0',
   },
   detailsBadge: {
     fontSize: '11px',
     fontWeight: '600',
-    color: 'var(--color-primary)',
-    backgroundColor: 'var(--color-on-primary-container)',
-    padding: '2px 8px',
+    padding: '2px 10px',
     borderRadius: 'var(--rounded-full)',
   },
   detailsSection: {
@@ -359,46 +581,52 @@ const styles = {
     flexDirection: 'column',
     gap: 'var(--spacing-xs)',
   },
-  sectionTitle: {
-    fontSize: '12px',
-    fontWeight: '600',
+  sectionLabel: {
+    fontSize: '10px',
+    fontWeight: '700',
     color: 'var(--color-outline)',
     textTransform: 'uppercase',
-    letterSpacing: '0.05em',
+    letterSpacing: '0.08em',
+    margin: 0,
   },
   sectionText: {
-    fontSize: '14px',
+    fontSize: '13px',
     color: 'var(--color-on-surface-variant)',
-    lineHeight: '1.5',
+    lineHeight: '1.55',
+    margin: 0,
   },
   propsList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 'var(--spacing-xs)',
     backgroundColor: 'var(--color-surface-container-low)',
     borderRadius: 'var(--rounded-md)',
-    padding: 'var(--spacing-sm)',
     border: '1px solid var(--color-outline-variant)',
+    overflow: 'hidden',
   },
-  propItem: {
+  propRow: {
     display: 'flex',
     justifyContent: 'space-between',
-    fontSize: '13px',
+    alignItems: 'flex-start',
+    gap: '12px',
+    padding: '8px 12px',
+    borderBottom: '1px solid var(--color-outline-variant)',
+    fontSize: '12px',
     lineHeight: '1.4',
   },
   propKey: {
     fontWeight: '600',
     color: 'var(--color-on-surface-variant)',
+    flexShrink: 0,
   },
   propVal: {
-    color: 'var(--color-primary)',
     fontWeight: '700',
     textAlign: 'right',
+    fontSize: '12px',
   },
   statusBox: {
     display: 'flex',
     alignItems: 'center',
-    gap: 'var(--spacing-xs)',
+    gap: '10px',
     backgroundColor: '#ecfdf5',
     border: '1px solid #a7f3d0',
     borderRadius: 'var(--rounded-md)',
@@ -408,25 +636,73 @@ const styles = {
     width: '8px',
     height: '8px',
     borderRadius: '50%',
-    backgroundColor: 'var(--color-secondary)',
-    boxShadow: '0 0 0 0 rgba(46, 125, 50, 0.4)',
-    animation: 'pulse 2s infinite',
+    backgroundColor: '#10b981',
+    flexShrink: 0,
+    animation: 'ragPulse 2s infinite',
   },
   statusText: {
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: '600',
-    color: 'var(--color-on-secondary-container)',
+    color: '#065f46',
+  },
+
+  // Navigation buttons inside panel
+  navRow: {
+    display: 'flex',
+    gap: '8px',
+    paddingTop: 'var(--spacing-xs)',
+    borderTop: '1px solid var(--color-outline-variant)',
+  },
+  navBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '7px 14px',
+    fontSize: '12px',
+    fontWeight: '600',
+    border: '1px solid var(--color-outline-variant)',
+    borderRadius: 'var(--rounded-md)',
+    backgroundColor: 'var(--color-surface-container-low)',
+    color: 'var(--color-on-surface-variant)',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+
+  // Summary card
+  summaryCard: {
+    backgroundColor: 'var(--color-surface)',
+    border: '1px solid var(--color-outline-variant)',
+    borderRadius: 'var(--rounded-lg)',
+    padding: 'var(--spacing-md)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--spacing-sm)',
+  },
+  summaryGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 'var(--spacing-xs)',
+  },
+  summaryItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    backgroundColor: 'var(--color-surface-container-low)',
+    borderRadius: 'var(--rounded-md)',
+    padding: '12px 8px',
+    textAlign: 'center',
+  },
+  summaryNum: {
+    fontSize: '18px',
+    fontWeight: '800',
+    color: 'var(--color-primary)',
+  },
+  summaryLabel: {
+    fontSize: '10px',
+    fontWeight: '600',
+    color: 'var(--color-on-surface-variant)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    marginTop: '2px',
   },
 };
-
-// Add CSS keyframe animation for status pulse
-const styleSheet = document.styleSheets[0];
-try {
-  styleSheet.insertRule(`
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(46, 125, 50, 0.4); }
-      70% { box-shadow: 0 0 0 10px rgba(46, 125, 50, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(46, 125, 50, 0); }
-    }
-  `, styleSheet.cssRules.length);
-} catch (e) {}
